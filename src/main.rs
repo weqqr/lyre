@@ -170,6 +170,7 @@ impl Constant {
     }
 }
 
+#[derive(Debug)]
 pub struct ConstantPool {
     pool: Vec<Constant>,
 }
@@ -180,7 +181,6 @@ impl ConstantPool {
         let mut pool = Vec::new();
         for _ in 0..constant_pool_count-1 {
             let constant = Constant::read(r)?;
-            println!("{:?}", constant);
             pool.push(constant);
         }
 
@@ -190,6 +190,20 @@ impl ConstantPool {
     }
 }
 
+fn read_vec<T, F, R>(r: &mut R, f: F) -> Result<Vec<T>> where
+    R: Read,
+    F: Fn(&mut R) -> Result<T>
+{
+    let count = r.read_u16::<BigEndian>()?;
+    let mut elements = Vec::new();
+    for _ in 0..count {
+        elements.push(f(r)?);
+    }
+
+    Ok(elements)
+}
+
+#[derive(Debug)]
 pub struct Attribute {
     attribute_name_index: u16,
     info: Vec<u8>,
@@ -208,6 +222,7 @@ impl Attribute {
     }
 }
 
+#[derive(Debug)]
 pub struct Field {
     access_flags: u16,
     name_index: u16,
@@ -220,11 +235,7 @@ impl Field {
         let access_flags = r.read_u16::<BigEndian>()?;
         let name_index = r.read_u16::<BigEndian>()?;
         let descriptor_index = r.read_u16::<BigEndian>()?;
-        let attributes_count = r.read_u16::<BigEndian>()?;
-        let mut attributes = Vec::new();
-        for _ in 0..attributes_count {
-            attributes.push(Attribute::read(r)?);
-        }
+        let attributes = read_vec(r, Attribute::read)?;
 
         Ok(Field {
             access_flags,
@@ -235,6 +246,7 @@ impl Field {
     }
 }
 
+#[derive(Debug)]
 pub struct Method {
     access_flags: u16,
     name_index: u16,
@@ -247,11 +259,7 @@ impl Method {
         let access_flags = r.read_u16::<BigEndian>()?;
         let name_index = r.read_u16::<BigEndian>()?;
         let descriptor_index = r.read_u16::<BigEndian>()?;
-        let attributes_count = r.read_u16::<BigEndian>()?;
-        let mut attributes = Vec::new();
-        for _ in 0..attributes_count {
-            attributes.push(Attribute::read(r)?);
-        }
+        let attributes = read_vec(r, Attribute::read)?;
 
         Ok(Method {
             access_flags,
@@ -262,6 +270,7 @@ impl Method {
     }
 }
 
+#[derive(Debug)]
 pub struct Class {
     major: u16,
     minor: u16,
@@ -305,30 +314,10 @@ impl Class {
         let this_class = cursor.read_u16::<BigEndian>()?;
         let super_class = cursor.read_u16::<BigEndian>()?;
 
-        let interfaces_count = cursor.read_u16::<BigEndian>()?;
-        let mut interfaces = Vec::new();
-        for _ in 0..interfaces_count {
-            let interface = cursor.read_u16::<BigEndian>()?;
-            interfaces.push(interface);
-        }
-
-        let fields_count = cursor.read_u16::<BigEndian>()?;
-        let mut fields = Vec::new();
-        for _ in 0..fields_count {
-            fields.push(Field::read(&mut cursor)?);
-        }
-
-        let methods_count = cursor.read_u16::<BigEndian>()?;
-        let mut methods = Vec::new();
-        for _ in 0..methods_count {
-            methods.push(Method::read(&mut cursor)?);
-        }
-
-        let attributes_count = cursor.read_u16::<BigEndian>()?;
-        let mut attributes = Vec::new();
-        for _ in 0..attributes_count {
-            attributes.push(Attribute::read(&mut cursor)?);
-        }
+        let interfaces = read_vec(&mut cursor, |r| Ok(r.read_u16::<BigEndian>()?))?;
+        let fields = read_vec(&mut cursor, Field::read)?;
+        let methods = read_vec(&mut cursor, Method::read)?;
+        let attributes = read_vec(&mut cursor, Attribute::read)?;
 
         Ok(Self {
             major,
@@ -352,6 +341,7 @@ fn main() {
     let main_class = args.next().unwrap();
 
     let class = Class::from_file(&class_path, &main_class).unwrap();
+    println!("{:#?}", class);
 
     println!("Hello, world!");
 }
