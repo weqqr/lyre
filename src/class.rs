@@ -79,18 +79,10 @@ pub enum Constant {
     String {
         string_index: usize,
     },
-    Integer {
-        data: u32,
-    },
-    Float {
-        data: f32,
-    },
-    Long {
-        data: u64,
-    },
-    Double {
-        data: f64,
-    },
+    Integer(u32),
+    Float(f32),
+    Long(u64),
+    Double(f64),
     NameAndType {
         name_index: usize,
         descriptor_index: usize,
@@ -135,18 +127,10 @@ impl Constant {
                     data,
                 }
             }
-            3 => Constant::Integer {
-                data: r.read_u32::<BigEndian>()?,
-            },
-            4 => Constant::Float {
-                data: r.read_f32::<BigEndian>()?,
-            },
-            5 => Constant::Long {
-                data: r.read_u64::<BigEndian>()?,
-            },
-            6 => Constant::Double {
-                data: r.read_f64::<BigEndian>()?,
-            },
+            3 => Constant::Integer(r.read_u32::<BigEndian>()?),
+            4 => Constant::Float(r.read_f32::<BigEndian>()?),
+            5 => Constant::Long(r.read_u64::<BigEndian>()?),
+            6 => Constant::Double(r.read_f64::<BigEndian>()?),
             7 => Constant::Class {
                 name_index: r.read_u16::<BigEndian>()?.into(),
             },
@@ -215,6 +199,16 @@ impl ConstantPool {
             pool
         })
     }
+
+    pub fn string(&self, index: u16) -> Result<String> {
+        let index = index as usize - 1;
+        let ref c = self.pool.get(index).ok_or(Error::InvalidConstantPoolIndex)?;
+        if let Constant::Utf8 { data } = c {
+            Ok(data.clone())
+        } else {
+            Err(Error::InvalidConstantPoolType)
+        }
+    }
 }
 
 fn read_vec<T, F, R>(r: &mut R, f: F) -> Result<Vec<T>> where
@@ -232,18 +226,18 @@ fn read_vec<T, F, R>(r: &mut R, f: F) -> Result<Vec<T>> where
 
 #[derive(Debug)]
 pub struct Attribute {
-    attribute_name_index: u16,
+    name: String,
     info: Vec<u8>,
 }
 
 impl Attribute {
-    pub fn read<R: Read>(r: &mut R) -> Result<Self> {
-        let attribute_name_index = r.read_u16::<BigEndian>()?;
+    pub fn read<R: Read>(r: &mut R, cp: &ConstantPool) -> Result<Self> {
+        let name = cp.string(r.read_u16::<BigEndian>()?)?;
         let info_length = r.read_u32::<BigEndian>()? as usize;
         let mut info = vec![0; info_length];
         r.read_exact(&mut info)?;
         Ok(Attribute {
-            attribute_name_index,
+            name,
             info
         })
     }
@@ -252,38 +246,54 @@ impl Attribute {
 #[derive(Debug)]
 pub struct Field {
     access_flags: AccessFlags,
-    name_index: u16,
-    descriptor_index: u16,
+    name: String,
+    descriptor: String,
     attributes: Vec<Attribute>,
 }
 
 impl Field {
-    pub fn read<R: Read>(r: &mut R) -> Result<Self> {
+    pub fn read<R: Read>(r: &mut R, cp: &ConstantPool) -> Result<Self> {
         Ok(Field {
             access_flags: AccessFlags::read(r)?,
-            name_index: r.read_u16::<BigEndian>()?,
-            descriptor_index: r.read_u16::<BigEndian>()?,
-            attributes: read_vec(r, Attribute::read)?,
+            name: cp.string(r.read_u16::<BigEndian>()?)?,
+            descriptor: cp.string(r.read_u16::<BigEndian>()?)?,
+            attributes: read_vec(r, |r| Attribute::read(r, cp))?,
         })
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn descriptor(&self) -> &str {
+        self.descriptor.as_str()
     }
 }
 
 #[derive(Debug)]
 pub struct Method {
     access_flags: AccessFlags,
-    name_index: u16,
-    descriptor_index: u16,
+    name: String,
+    descriptor: String,
     attributes: Vec<Attribute>,
 }
 
 impl Method {
-    pub fn read<R: Read>(r: &mut R) -> Result<Self> {
+    pub fn read<R: Read>(r: &mut R, cp: &ConstantPool) -> Result<Self> {
         Ok(Method {
             access_flags: AccessFlags::read(r)?,
-            name_index: r.read_u16::<BigEndian>()?,
-            descriptor_index: r.read_u16::<BigEndian>()?,
-            attributes: read_vec(r, Attribute::read)?,
+            name: cp.string(r.read_u16::<BigEndian>()?)?,
+            descriptor: cp.string(r.read_u16::<BigEndian>()?)?,
+            attributes: read_vec(r, |r| Attribute::read(r, cp))?,
         })
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn descriptor(&self) -> &str {
+        self.descriptor.as_str()
     }
 }
 
@@ -318,16 +328,30 @@ impl Class {
             return Err(Error::InvalidSignature(magic));
         }
 
+        let version = Version::read(&mut cursor)?;
+        let constant_pool = ConstantPool::read(&mut cursor)?;
+        let access_flags = AccessFlags::read(&mut cursor)?;
+        let this_class = cursor.read_u16::<BigEndian>()?;
+        let super_class = cursor.read_u16::<BigEndian>()?;
+        let interfaces = read_vec(&mut cursor, |r| Ok(r.read_u16::<BigEndian>()?))?;
+        let fields = read_vec(&mut cursor, |r| Field::read(r, &constant_pool))?;
+        let methods = read_vec(&mut cursor, |r| Method::read(r, &constant_pool))?;
+        let attributes = read_vec(&mut cursor, |r| Attribute::read(r, &constant_pool))?;
+
         Ok(Self {
-            version: Version::read(&mut cursor)?,
-            constant_pool: ConstantPool::read(&mut cursor)?,
-            access_flags: AccessFlags::read(&mut cursor)?,
-            this_class: cursor.read_u16::<BigEndian>()?,
-            super_class: cursor.read_u16::<BigEndian>()?,
-            interfaces: read_vec(&mut cursor, |r| Ok(r.read_u16::<BigEndian>()?))?,
-            fields: read_vec(&mut cursor, Field::read)?,
-            methods: read_vec(&mut cursor, Method::read)?,
-            attributes: read_vec(&mut cursor, Attribute::read)?,
+            version,
+            constant_pool,
+            access_flags,
+            this_class,
+            super_class,
+            interfaces,
+            fields,
+            methods,
+            attributes,
         })
+    }
+
+    pub fn method(&self, name: &str) -> Option<&Method> {
+        self.methods.iter().find(|method| method.name() == name)
     }
 }

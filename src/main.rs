@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod class;
 
 use class::Class;
@@ -18,18 +20,24 @@ pub enum Error {
 
     #[error("Invalid access flags: 0x{0:04X}")]
     InvalidAccessFlags(u16),
+
+    #[error("Invalid constant pool index")]
+    InvalidConstantPoolIndex,
+
+    #[error("Invalid constant pool type")]
+    InvalidConstantPoolType,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn main() {
     let mut args = std::env::args();
-    let _ = args.next().unwrap();
+    let _executable = args.next().unwrap();
     let class_path = args.next().unwrap();
     let main_class = args.next().unwrap();
 
     let class = Class::from_file(&class_path, &main_class).unwrap();
+    let main = class.method("main").unwrap();
+    println!("{}{}", main.name(), main.descriptor());
     println!("{:#?}", class);
-
-    println!("Hello, world!");
 }
